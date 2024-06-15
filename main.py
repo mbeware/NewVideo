@@ -1,153 +1,87 @@
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from watchdog.events import FileMovedEvent,FileCreatedEvent
 import os
+import ffmpeg
+import m3u8
+
 from flask import Flask, render_template_string, request, jsonify
-from datetime import datetime, timedelta
-from collections import defaultdict
-import json
+
 
 app = Flask(__name__)
-video_files = defaultdict(list)  # Group by year/month
-new_files_by_day = defaultdict(list)  # Files added within the last week
-one_week_ago = datetime.now() - timedelta(days=7)
-state_file = ".watcher.state"
-folder_to_monitor = "/mnt/BH-03/NewVideo"
-state = {}
+folder_to_monitor = "/mnt/AllVideo/NewVideo"
+playlist_path = '/mnt/AllVideo/Playlists/Series.m3u8'
 
-def load_state():
-    global state
-    try:
-        with open(os.path.join(folder_to_monitor, state_file), 'r') as f:
-            state = json.load(f)
-    except FileNotFoundError:
-        state = {}
+def add_entry_to_m3u8(playlist_path, video_path):
+    # Extract the filename without path and extension
+    base_name = os.path.basename(video_path)
+    name, _ = os.path.splitext(base_name)
+    # Replace dots with spaces
+    name = name.replace('.', ' ')
 
-def save_state():
-    with open(os.path.join(folder_to_monitor, state_file), 'w') as f:
-        json.dump(state, f)
+    # Load the existing M3U8 playlist
+    playlist = m3u8.load(playlist_path)
 
-def add_file(filepath):
-    file_date = datetime.fromtimestamp(os.path.getmtime(filepath))
-    year_month = file_date.strftime("%Y-%m")
-    video_files[year_month].append((file_date, filepath))
+    # Create a new entry
+    new_entry = m3u8.Segment(uri=video_path, title=name, duration=-1)
 
-    if file_date > one_week_ago:
-        day = file_date.strftime("%Y-%m-%d")
-        new_files_by_day[day].append((file_date, filepath))
+    # Append the new entry to the playlist
+    playlist.segments.append(new_entry)
+
+    # Save the updated playlist back to the file
+    with open(playlist_path, 'w') as f:
+        f.write(playlist.dumps())
+
 
 class VideoFileHandler(FileSystemEventHandler):
     def __init__(self, folder):
         self.folder = folder
-        self.scan_existing_files()
+        self.newf = []
+        self.block = False
 
     def on_created(self, event):
-        if event.is_directory:
-            return
-        if event.src_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
-            add_file(event.src_path)
-            print(f"New video file detected: {event.src_path}")
+        if not self.block:
+            self.block=True        
+            if event.is_directory:
+                return
+            if event.src_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
+                if not (event.src_path in self.newf): 
+                    self.newf.append(event.src_path)
+                    add_entry_to_m3u8(playlist_path,event.src_path)
+                    print(f"New video file detected: {event.src_path}")
+                else:
+                    print(f"Duplicate video file detected and not added: {event.src_path}")
+        self.block=False
 
-    def scan_existing_files(self):
-        for root, _, files in os.walk(self.folder):
-            for file in files:
-                if file.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
-                    add_file(os.path.join(root, file))
+
+
 
 @app.route('/')
 def index():
-    sorted_new_files_by_day = {
-        k: sorted(v, key=lambda x: x[0], reverse=True)
-        for k, v in sorted(new_files_by_day.items(), reverse=True)
-    }
-    sorted_video_files = {
-        k: sorted(v, key=lambda x: x[0], reverse=True)
-        for k, v in sorted(video_files.items(), reverse=True)
-    }
     return render_template_string("""
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Video Files</title>
+        <title>New video to watch</title>
         <style>
             .hidden { display: none; }
             .toggle { cursor: pointer; }
         </style>
-        <script>
-            function toggleVisibility(id) {
-                var element = document.getElementById(id);
-                if (element.classList.contains('hidden')) {
-                    element.classList.remove('hidden');
-                } else {
-                    element.classList.add('hidden');
-                }
-            }
-
-            function updateState(filepath, key, checked) {
-                fetch('/update_state', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ filepath: filepath, key: key, checked: checked })
-                }).then(response => {
-                    if (!response.ok) {
-                        alert('Failed to update state');
-                    }
-                });
-            }
-        </script>
     </head>
     <body>
-        <h1>New Video Files (Last Week)</h1>
-        {% for day, files in sorted_new_files_by_day.items() %}
-        <h2>{{ day }}</h2>
-        <ul>
-            {% for date, video in files %}
-            <li>
-                <input type="checkbox" {% if state.get(video, {}).get('watched') %}checked{% endif %} onclick="updateState('{{ video }}', 'watched', this.checked)"> Watched
-                <input type="checkbox" {% if state.get(video, {}).get('interesting') %}checked{% endif %} onclick="updateState('{{ video }}', 'interesting', this.checked)"> Interesting
-                <a href="{{ video }}" download>{{ video }}</a> ({{ date.strftime("%Y-%m-%d %H:%M:%S") }})
-            </li>
-            {% endfor %}
-        </ul>
-        {% endfor %}
-        <h1>All Video Files</h1>
-        {% for year_month, files in sorted_video_files.items() %}
-        <h2 class="toggle" onclick="toggleVisibility('{{ year_month }}')">{{ year_month }}</h2>
-        <ul id="{{ year_month }}" class="hidden">
-            {% for date, video in files %}
-            <li>
-                <input type="checkbox" {% if state.get(video, {}).get('watched') %}checked{% endif %} onclick="updateState('{{ video }}', 'watched', this.checked)"> Watched
-                <input type="checkbox" {% if state.get(video, {}).get('interesting') %}checked{% endif %} onclick="updateState('{{ video }}', 'interesting', this.checked)"> Interesting
-                <a href="{{ video }}" download>{{ video }}</a> ({{ date.strftime("%Y-%m-%d %H:%M:%S") }})
-            </li>
-            {% endfor %}
-        </ul>
-        {% endfor %}
+        <h1>web interface no implemented yet</h1>
     </body>
     </html>
-    """, sorted_new_files_by_day=sorted_new_files_by_day, sorted_video_files=sorted_video_files, state=state)
-
-@app.route('/update_state', methods=['POST'])
-def update_state():
-    data = request.json
-    filepath = data['filepath']
-    key = data['key']
-    checked = data['checked']
-    if filepath not in state:
-        state[filepath] = {}
-    state[filepath][key] = checked
-    save_state()
-    return '', 204
+    """)
+ 
 
 if __name__ == "__main__":
-    load_state()
-    
     event_handler = VideoFileHandler(folder_to_monitor)
     observer = Observer()
-    observer.schedule(event_handler, folder_to_monitor, recursive=True)
+    observer.schedule(event_handler, folder_to_monitor, recursive=True,event_filter=[FileCreatedEvent])
+
     observer.start()
 
     try:
