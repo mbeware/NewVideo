@@ -6,6 +6,18 @@
 		{
 			"name": "NewVideo",
 			"path": "."
+		},
+		{
+			"name": "OverlayFSInfo",
+			"path": "../OverlayFSInfo"
+		},
+		{
+			"name": "MergeVideo",
+			"path": "../MergeVideo"
+		},
+		{
+			"name": "Clicktest",
+			"path": "../Clicktest"
 		}
 	],
 	"settings": {}
