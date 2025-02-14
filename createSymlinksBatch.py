@@ -5,8 +5,9 @@ import datetime
 
 # Define the base directory and the playlist directory
 base_dir = '/mnt/AllVideo'
-playlist_dir = os.path.join(base_dir, 'Playlists/Playlists_all')
-excluded_dirs = os.path.join(base_dir, 'Playlists') 
+playlist_dir = os.path.join(base_dir, '000_Playlists/Playlists_all')
+#playlist_dir = '/mnt/Data004/playlist/Playlists_all'
+excluded_dirs = os.path.join(base_dir, '000_Playlists') 
 
 # Ensure the playlist directory exists
 os.makedirs(playlist_dir, exist_ok=True)
@@ -15,13 +16,16 @@ os.makedirs(playlist_dir, exist_ok=True)
 video_extensions = ['.mp4', '.avi', '.mkv', '.mov', '.flv', '.wmv', '.webm']
 
 # Date filter: Only include files modified after this date
-date_filter = datetime.datetime(2024, 7, 31)
+date_filter = datetime.datetime(1990, 8, 4)
+
 
 # Function to create symlinks for video files
 def create_symlinks():
     for root, dirs, files in os.walk(base_dir):
-        # Skip the playlist directory
+        # Skip the playlist directory 
         if root.startswith(playlist_dir) or root.startswith(excluded_dirs):
+            continue
+        if root.find('.Trash') != -1:
             continue
         
         # List of video files after the date filter
